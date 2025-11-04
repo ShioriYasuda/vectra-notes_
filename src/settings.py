@@ -1,13 +1,16 @@
 # src/settings.py
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+from pydantic_settings import BaseSettings
+
+ROOT = Path(__file__).resolve().parents[1]
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    OIDC_ISSUER: str = "http://localhost:8080/realms/dev"
+    OIDC_AUDIENCE: str = "vectra-api"
+    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/vectra"
 
-    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@db:5432/vectra"
-    OIDC_ISSUER: str | None = None
-    OIDC_AUDIENCE: str | None = None
-    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
-    LOG_LEVEL: str = "INFO"
+    class Config:
+        env_file = ROOT / ".env"
+        env_file_encoding = "utf-8"
 
 settings = Settings()

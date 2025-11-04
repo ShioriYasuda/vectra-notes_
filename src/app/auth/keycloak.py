@@ -1,59 +1,49 @@
 # src/app/auth/keycloak.py
-from typing import Annotated
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import jwt
+import time
 import httpx
-from functools import lru_cache
-from settings import settings
+from jose import jwt
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from settings import settings  # ← src直下の settings.py を読む
 
-security = HTTPBearer(auto_error=False)
+security = HTTPBearer(auto_error=True)
+_jwks_cache = {"ts": 0.0, "jwks": None}
 
-@lru_cache(maxsize=1)
-def _jwks() -> dict | None:
-    if not settings.OIDC_ISSUER:
-        return None
-    url = settings.OIDC_ISSUER.rstrip("/") + "/protocol/openid-connect/certs"
-    with httpx.Client(timeout=5) as cl:
-        return cl.get(url).json()
+def _fetch_jwks():
+    """Keycloakの公開鍵(JWKS)を5分キャッシュして取得"""
+    global _jwks_cache
+    if not _jwks_cache["jwks"] or (time.time() - _jwks_cache["ts"] > 300):
+        url = f"{settings.OIDC_ISSUER}/protocol/openid-connect/certs"
+        try:
+            resp = httpx.get(url, timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"JWKS fetch failed: {e}")
+        _jwks_cache["jwks"] = resp.json()
+        _jwks_cache["ts"] = time.time()
+    return _jwks_cache["jwks"]
 
-def _decode_token(token: str) -> dict:
-    if not settings.OIDC_ISSUER:
-        # 認証オフ（開発用）
-        return {"sub": "anonymous", "roles": ["anonymous"]}
+def _get_key_for_token(token: str):
+    """トークンの kid に合う公開鍵をJWKSから探す"""
+    header = jwt.get_unverified_header(token)
+    kid = header.get("kid")
+    for k in _fetch_jwks().get("keys", []):
+        if k.get("kid") == kid:
+            return k
+    raise HTTPException(status_code=401, detail="Signing key not found (kid mismatch)")
 
-    jwks = _jwks()
-    if not jwks:
-        raise HTTPException(status_code=503, detail="JWKS not available")
-
-    unverified = jwt.get_unverified_header(token)
-    kid = unverified.get("kid")
-    key = next((k for k in jwks.get("keys", []) if k.get("kid") == kid), None)
-    if not key:
-        raise HTTPException(status_code=401, detail="Unknown key")
-
-    options = {"verify_aud": bool(settings.OIDC_AUDIENCE)}
-    claims = jwt.decode(
-        token,
-        key,
-        algorithms=key.get("alg", "RS256"),
-        audience=settings.OIDC_AUDIENCE,
-        issuer=settings.OIDC_ISSUER,
-        options=options,
-    )
-    return claims
-
-async def current_user(
-    cred: Annotated[HTTPAuthorizationCredentials | None, Depends(security)]
-) -> dict:
-    if not cred:
-        # 認証ヘッダなし
-        if not settings.OIDC_ISSUER:
-            return {"sub": "anonymous", "roles": ["anonymous"]}
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+async def current_user(creds: HTTPAuthorizationCredentials = Depends(security)):
+    """Bearerトークンを検証してペイロードを返す"""
+    token = creds.credentials
+    key = _get_key_for_token(token)
     try:
-        return _decode_token(cred.credentials)
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        payload = jwt.decode(
+            token,
+            key,
+            algorithms=["RS256"],
+            audience=settings.OIDC_AUDIENCE,
+            issuer=settings.OIDC_ISSUER,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+    return payload  # 必要に応じて dict から必要フィールドを取り出してもOK

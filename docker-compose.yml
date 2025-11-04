@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   db:
     image: postgres:16
@@ -6,26 +5,31 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: vectra
+    ports:
+      - "5432:5432"
     volumes:
       - dbdata:/var/lib/postgresql/data
-      - ./docker/sql/001_enable_pgvector.sql:/docker-entrypoint-initdb.d/001_pgvector.sql
-    ports: ["5432:5432"]
+
   api:
     build:
-      context: ./src/docker/keycloak  
-      dockerfile: docker/Dockerfile.api
+      context: ./src
+      dockerfile: docker/api/Dockerfile        # ← 必ず存在する実ファイル名
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/vectra
-    depends_on: [db]
-    ports: ["8000:8000"]
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0.6
-    command: ["start-dev", "--import-realm"]
+    build:
+      context: ./src/docker/keycloak           # ← このフォルダをビルドコンテキストに
+      dockerfile: Dockerfile                   # ← フォルダ内の Dockerfile 名
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
-    volumes:
-      - ./docker/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
-    ports: ["8080:8080"]
+    ports:
+      - "8080:8080"
+
 volumes:
   dbdata:
