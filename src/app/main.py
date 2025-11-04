@@ -1,41 +1,29 @@
-# src/app/main.py
-from fastapi import FastAPI, Depends
-from fastapi.openapi.utils import get_openapi
-
-# ← ここを“絶対 import”で統一（作業ディレクトリを src にして起動する前提）
+from fastapi import FastAPI
 from app.routers import health, docs, search
 from app.models.base import Base
 from app.deps import engine
-from app.auth.keycloak import current_user  # Keycloak のJWT検証
+from sqlalchemy import text
 
-app = FastAPI(title="vectra-notes", version="0.1.0")
+app = FastAPI(title="vectra-notes")
 
-# DBテーブルは起動時にまとめて作成（実務は Alembic 推奨）
 @app.on_event("startup")
 def on_startup():
+    print("[BOOT] checking DB connection...")
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))  # DB疎通チェック
+    print("[BOOT] DB OK ✅")
+
+    # --- ★ 初回のみ: DBにテーブルを自動作成 ---
+    print("[BOOT] creating tables (if not exist)...")
     Base.metadata.create_all(bind=engine)
+    print("[BOOT] tables ready ✅")
 
-# 公開OKのルーター
+# 📌 /health エンドポイント（FastAPI 独自の health なので名前衝突回避）
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+# --- ルータ登録 ---
 app.include_router(health.router)
+app.include_router(docs.router)
 app.include_router(search.router)
-
-# 認証が必要なルーター（例：/docs を保護したい場合）
-# 既存の docs ルーター全体に認証を必須にする
-app.include_router(docs.router, dependencies=[Depends(current_user)])
-
-# Swagger で「Authorize（Bearer）」ボタンを出すためのスキーマ追加
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        routes=app.routes,
-    )
-    schema.setdefault("components", {}).setdefault("securitySchemes", {}).update({
-        "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
-    })
-    app.openapi_schema = schema
-    return schema
-
-app.openapi = custom_openapi

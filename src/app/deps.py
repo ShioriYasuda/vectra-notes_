@@ -1,18 +1,23 @@
-from collections.abc import Generator
-from pydantic_settings import BaseSettings
+# src/app/deps.py
+from contextlib import contextmanager
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker
+from settings import settings
 
-class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@db:5432/vectra"
-    OIDC_ISSUER: str | None = "http://keycloak:8080/realms/dev"
-    OIDC_AUDIENCE: str | None = "vectra-api"
+SQLALCHEMY_DATABASE_URL = str(settings.DATABASE_URL).strip()
 
-settings = Settings()
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    future=True,
+    pool_pre_ping=True,
+)
 
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(engine, expire_on_commit=False, autoflush=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
-def get_session() -> Generator[Session, None, None]:
-    with SessionLocal() as s:
-        yield s
+@contextmanager
+def get_session():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
